@@ -1,0 +1,14 @@
+title:
+  en_us: Autosave
+tooltip:
+  en_us: >-
+    Autosave the document after a set interval. The feature runs in
+    the background and will activate when switching between views to 
+    minimize interruption. A bar will appear at the top of the Revit
+    window to indicate the document is saving. Note that undo history
+    is lost after document saves: do not activate this tool if this
+    is important to your workflows. If Revit stops unexpectedly while
+    working in a central model, either open the local model directly 
+    and sync, or open the model from the cloud and select Keep my
+    changes and open the model when prompted. This tool does not
+    replace the synchronize tool or native Revit sync.

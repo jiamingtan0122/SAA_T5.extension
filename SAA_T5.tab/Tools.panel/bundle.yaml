@@ -1,0 +1,7 @@
+layout:
+  - RevisionCloudFromElements
+  - MergeRevisionClouds
+  - StraightenWall
+  - SplitWallAtColumn
+  - TransferSingle
+  - TagAlign

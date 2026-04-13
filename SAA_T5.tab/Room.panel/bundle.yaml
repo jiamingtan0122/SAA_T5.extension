@@ -1,0 +1,7 @@
+layout:
+  - RoomNumber
+  - DoorMark
+  - RoomChangeLevel
+  - RoomTotalArea
+  - RoomToFloor
+  - RoomToCeiling

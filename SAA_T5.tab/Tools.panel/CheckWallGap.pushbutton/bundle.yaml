@@ -1,0 +1,2 @@
+title: Check Wall Gap
+tooltip: Pick one wall or scan all host walls, then check wall tops against host and linked slab undersides and report the top offset from slab bottom.

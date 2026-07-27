@@ -1,7 +1,9 @@
 layout:
   - RoomNumber
+  - RoomSequenceRename
   - DoorMark
   - RoomChangeLevel
   - RoomTotalArea
   - RoomToFloor
   - RoomToCeiling
+  - DisableRoomTagLeader

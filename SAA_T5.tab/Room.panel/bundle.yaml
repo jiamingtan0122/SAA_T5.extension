@@ -1,6 +1,5 @@
 layout:
   - RoomNumber
-  - RoomParameterUpdate
   - DoorMark
   - RoomChangeLevel
   - RoomTotalArea

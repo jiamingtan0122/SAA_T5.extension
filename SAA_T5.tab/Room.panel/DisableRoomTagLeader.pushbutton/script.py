@@ -1,90 +1,87 @@
 # -*- coding: utf-8 -*-
-
 __title__ = "Disable\nTag Leader"
-
 __author__ = "JM"
-
-__doc__ = """Version = 1.1
-
-Date    = 12.05.2025
-
+__doc__ = """Version = 1.4
+Date    = 30.07.2026
 _____________________________________________________________________
-
 Description:
-
-
-
-Disables the leader on ALL Room Tags in the active view.
-
-Tag head positions are preserved after leader is removed.
-
+Disables the leader on selected Room Tags only, so you can keep the
+leader on any tags that still need one.
+Tag head positions are preserved after leader is removed, where the
+room geometry allows it (Revit will not let a leader-less tag head
+sit outside its host room, so a handful may fall back to the
+room's crosshair position instead).
 _____________________________________________________________________
-
 How-to:
-
-
-
--> Open the affected view
-
+-> Select the Room Tags you want to fix (or run with nothing
+   selected and you'll be prompted to pick them)
 -> Run this script
-
 -> Done
-
 _____________________________________________________________________
-
 """
-
 from Autodesk.Revit.DB import *
+from Autodesk.Revit.UI import Selection
 from pyrevit import revit, forms, script
 
 doc = revit.doc
+uidoc = revit.uidoc
 output = script.get_output()
 
-# ------------------------------------- COLLECT ALL ROOM TAGS
-
-collector = FilteredElementCollector(doc)\
-    .OfCategory(BuiltInCategory.OST_RoomTags)\
-    .WhereElementIsNotElementType()\
-    .ToElements()
+# ------------------------------------- GET ROOM TAGS FROM SELECTION
+selection = revit.get_selection()
+collector = [el for el in selection if el.Category
+             and el.Category.Id.IntegerValue == int(BuiltInCategory.OST_RoomTags)]
 
 if not collector:
-    forms.alert("No Room Tags found in this document.")
+    # nothing pre-selected (or selection had no room tags) -> prompt to pick
+    try:
+        picked_refs = uidoc.Selection.PickObjects(
+            Selection.ObjectType.Element,
+            forms.SelectionFilter(
+                lambda el: el.Category is not None
+                and el.Category.Id.IntegerValue == int(BuiltInCategory.OST_RoomTags)
+            ),
+            "Select Room Tags to remove the leader from"
+        )
+        collector = [doc.GetElement(r.ElementId) for r in picked_refs]
+    except Exception:
+        forms.alert("No Room Tags selected.")
+        script.exit()
+
+if not collector:
+    forms.alert("No Room Tags selected.")
     script.exit()
 
-# ------------------------------------- DISABLE LEADERS, PRESERVE POSITION
+total = len(collector)
 
+# ------------------------------------- DISABLE LEADERS, PRESERVE POSITION
 fixed = 0
-skipped = 0
+fallback = 0
+no_leader = 0
 
 with Transaction(doc, "Disable Room Tag Leaders") as t:
     t.Start()
-    try:
-        for tag in collector:
-            try:
-                if tag.HasLeader:
-                    # Step 1: capture current tag head position
-                    current_pos = tag.Location.Point
-
-                    # Step 2: disable leader (this moves the tag head)
-                    tag.HasLeader = False
-
-                    # Step 3: restore original tag head position
-                    tag.Location.Move(
-                        current_pos - tag.Location.Point
-                    )
+    with forms.ProgressBar(title="Removing tag leaders ({value} of {max_value})") as pb:
+        for i, tag in enumerate(collector):
+            if tag.HasLeader:
+                original_pos = tag.TagHeadPosition
+                tag.HasLeader = False
+                try:
+                    # try to restore the exact remembered position
+                    tag.TagHeadPosition = original_pos
                     fixed += 1
-                else:
-                    skipped += 1
-            except Exception as e:
-                output.print_md("**Skipped tag {}**: {}".format(tag.Id, str(e)))
-                skipped += 1
-        t.Commit()
-    except Exception as e:
-        t.RollBack()
-        forms.alert("Transaction failed: {}".format(str(e)))
-        script.exit()
+                except Exception:
+                    # position was outside the room -> Revit keeps the
+                    # crosshair position it snapped to instead
+                    fallback += 1
+            else:
+                no_leader += 1
+            pb.update_progress(i + 1, total)
+    t.Commit()
 
 # ------------------------------------- REPORT
-
-output.print_md("### Disable Room Tag Leaders — Done")
-output.print_md
+output.print_md(
+    "**Done** — {} tags total | {} restored to original position | "
+    "{} snapped to room crosshair (couldn't sit outside room) | {} already had no leader"
+    .format(total, fixed, fallback, no_leader)
+)

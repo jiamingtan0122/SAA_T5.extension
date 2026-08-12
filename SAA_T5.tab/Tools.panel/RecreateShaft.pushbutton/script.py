@@ -20,18 +20,25 @@ import traceback
 from Autodesk.Revit.DB import (
     BuiltInCategory,
     BuiltInParameter,
+    CheckoutStatus,
     CurveArray,
     Element,
     ElementId,
+    FailureProcessingResult,
+    FailureSeverity,
     FilteredElementCollector,
     FilteredWorksetCollector,
+    IFailuresPreprocessor,
     Level,
     Line,
     RevitLinkInstance,
     Transaction,
+    TransactionGroup,
+    TransactionStatus,
     Workset,
     WorksetDefaultVisibilitySettings,
     WorksetKind,
+    WorksharingUtils,
     XYZ,
 )
 from System.Collections.Generic import List
@@ -197,6 +204,60 @@ def collect_host_shafts_in_workset(host_doc, workset_id):
     return result
 
 
+def get_other_user_owner(host_doc, element_id):
+    """Returns the username currently holding this element (if it's
+    checked out by someone other than us), or None if it's free to edit."""
+    try:
+        status = WorksharingUtils.GetCheckoutStatus(host_doc, element_id)
+    except Exception:
+        return None
+    if status != CheckoutStatus.OwnedByOtherUser:
+        return None
+    try:
+        return WorksharingUtils.GetWorksharingTooltipInfo(host_doc, element_id).Owner
+    except Exception:
+        return "another user"
+
+
+class ShaftFailuresPreprocessor(IFailuresPreprocessor):
+    """Suppress warnings and roll back a rejected shaft without a dialog.
+
+    Revit only processes sketch failures when a real Transaction commits;
+    a SubTransaction does not provide a failure-processing boundary.
+    """
+
+    def __init__(self):
+        self.error_messages = []
+
+    def PreprocessFailures(self, failures_accessor):
+        failures = list(failures_accessor.GetFailureMessages())
+        if not failures:
+            return FailureProcessingResult.Continue
+
+        for failure in failures:
+            if failure.GetSeverity() == FailureSeverity.Warning:
+                failures_accessor.DeleteWarning(failure)
+            else:
+                try:
+                    message = safe_str(failure.GetDescriptionText())
+                except Exception:
+                    message = "Revit rejected the shaft opening."
+                if message and message not in self.error_messages:
+                    self.error_messages.append(message)
+
+        if self.error_messages:
+            return FailureProcessingResult.ProceedWithRollBack
+        return FailureProcessingResult.ProceedWithCommit
+
+
+def set_failure_handling(transaction, preprocessor):
+    """Attaches quiet warning/error handling to one real Transaction."""
+    options = transaction.GetFailureHandlingOptions()
+    options.SetFailuresPreprocessor(preprocessor)
+    options.SetClearAfterRollback(True)
+    transaction.SetFailureHandlingOptions(options)
+
+
 def assign_workset(element, workset_id):
     param = element.get_Parameter(BuiltInParameter.ELEM_PARTITION_PARAM)
     if param is not None and not param.IsReadOnly:
@@ -233,8 +294,7 @@ def is_element_still_valid(element):
     regeneration (e.g. two shafts with identical overlapping boundaries on
     the same levels get consolidated into one opening automatically)."""
     try:
-        _ = element.Id
-        return True
+        return element is not None and element.IsValidObject
     except Exception:
         return False
 
@@ -576,36 +636,95 @@ def main():
     created = []
     errors = []
     deleted_count = 0
+    locked_shaft_owners = []  # [(element_id, owner_username)]
     workset_created = False
 
-    transaction = Transaction(doc, "Create Shaft Openings from Link")
-    transaction.Start()
+    transaction_group = TransactionGroup(doc, "Create Shaft Openings from Link")
+    transaction_group.Start()
     try:
+        setup_transaction = Transaction(doc, "Prepare copied shaft openings")
+        setup_transaction.Start()
+        setup_failures = ShaftFailuresPreprocessor()
+        set_failure_handling(setup_transaction, setup_failures)
+
         workset, workset_created = get_or_create_workset(doc, COPIED_SHAFT_WORKSET_NAME)
 
-        old_shaft_ids = collect_host_shafts_in_workset(doc, workset.Id)
+        old_shaft_ids_all = collect_host_shafts_in_workset(doc, workset.Id)
+        old_shaft_ids = []
+        for shaft_id in old_shaft_ids_all:
+            owner = get_other_user_owner(doc, shaft_id)
+            if owner:
+                locked_shaft_owners.append((shaft_id, owner))
+            else:
+                old_shaft_ids.append(shaft_id)
+
         if old_shaft_ids:
             doc.Delete(List[ElementId](old_shaft_ids))
             deleted_count = len(old_shaft_ids)
 
+        setup_status = setup_transaction.Commit()
+        if setup_status != TransactionStatus.Committed:
+            raise RuntimeError(
+                "Could not prepare the target workset: {0}".format(
+                    "; ".join(setup_failures.error_messages) or "Revit rolled back the setup transaction."
+                )
+            )
+
         for link_instance, linked_opening in shaft_jobs:
+            linked_id = (
+                linked_opening.Id.IntegerValue
+                if hasattr(linked_opening.Id, "IntegerValue")
+                else linked_opening.Id.Value
+            )
+            shaft_transaction = Transaction(doc, "Create linked shaft {0}".format(linked_id))
+            shaft_transaction.Start()
+            shaft_failures = ShaftFailuresPreprocessor()
+            set_failure_handling(shaft_transaction, shaft_failures)
             try:
                 new_opening = create_shaft_from_linked_opening(
                     doc, link_instance, linked_opening, level_resolution=level_resolution
                 )
                 assign_workset(new_opening, workset.Id)
-                created.append((link_instance, linked_opening, new_opening))
+                commit_status = shaft_transaction.Commit()
+                if commit_status == TransactionStatus.Committed:
+                    created.append((link_instance, linked_opening, new_opening))
+                else:
+                    errors.append(
+                        (
+                            link_instance,
+                            linked_opening,
+                            "Revit rolled back this shaft:\n{0}".format(
+                                "\n".join(shaft_failures.error_messages)
+                                or "The shaft sketch or its constraints are invalid in the host model."
+                            ),
+                        )
+                    )
             except Exception:
-                errors.append((link_instance, linked_opening, traceback.format_exc()))
+                err_text = traceback.format_exc()
+                try:
+                    if shaft_transaction.HasStarted() and not shaft_transaction.HasEnded():
+                        shaft_transaction.RollBack()
+                except Exception:
+                    pass
+                errors.append((link_instance, linked_opening, err_text))
 
-        transaction.Commit()
+        transaction_group.Assimilate()
     except Exception:
-        transaction.RollBack()
+        try:
+            if transaction_group.HasStarted() and not transaction_group.HasEnded():
+                transaction_group.RollBack()
+        except Exception:
+            pass
         TaskDialog.Show("Create Shaft Openings from Link", "Setup failed:\n{0}".format(traceback.format_exc()))
         return
 
-    valid_created = [(li, lo, new) for li, lo, new in created if is_element_still_valid(new)]
-    merged_count = len(created) - len(valid_created)
+    valid_created = []
+    merged_count = 0
+    for link_instance, linked_opening, new_opening in created:
+        if is_element_still_valid(new_opening):
+            valid_created.append((link_instance, linked_opening, new_opening))
+        else:
+            merged_count += 1
     created = valid_created
 
     output.print_md("# Create Shaft Openings from Link")
@@ -630,6 +749,15 @@ def main():
         output.print_md("\n**Skipped unloaded link(s):** {0}".format(", ".join(unloaded_links)))
     if empty_links:
         output.print_md("**Link(s) with no shaft openings:** {0}".format(", ".join(empty_links)))
+    if locked_shaft_owners:
+        owner_counts = Counter(owner for _id, owner in locked_shaft_owners)
+        owner_summary = ", ".join("{0} ({1})".format(owner, count) for owner, count in owner_counts.items())
+        output.print_md(
+            "**{0}** old shaft(s) on the workset were skipped because they're currently checked out: {1}. "
+            "Ask them to Sync to Central (which relinquishes ownership), then Reload Latest and re-run to pick those up.".format(
+                len(locked_shaft_owners), owner_summary
+            )
+        )
     if merged_count:
         output.print_md(
             "**{0}** created shaft(s) were auto-merged by Revit into other overlapping shafts during regeneration (identical footprint on the same levels) and are not listed individually below.".format(
@@ -680,13 +808,14 @@ def main():
         TaskDialogIcon.TaskDialogIconInformation if not errors else TaskDialogIcon.TaskDialogIconWarning
     )
     result_dialog.MainInstruction = "Created {0} of {1} shaft opening(s).".format(len(created), len(shaft_jobs))
-    result_dialog.MainContent = "From {0} link(s). Workset '{1}': deleted {2}, created {3}. {4} error(s).{5}".format(
+    result_dialog.MainContent = "From {0} link(s). Workset '{1}': deleted {2}, created {3}. {4} error(s).{5}{6}".format(
         len(chosen_links),
         COPIED_SHAFT_WORKSET_NAME,
         deleted_count,
         len(created),
         len(errors),
         " {0} auto-merged by Revit.".format(merged_count) if merged_count else "",
+        " {0} skipped (checked out by another user).".format(len(locked_shaft_owners)) if locked_shaft_owners else "",
     )
 
     if errors:

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 __title__ = "Room\nNumber"
-__author__ = "JK_Sim"
+__author__ = "JM"
 __doc__ = """Version = 1.0
 Date    = 30.10.2025
 _____________________________________________________________________
@@ -46,7 +46,16 @@ if not isinstance(selected_room, SpatialElement) or selected_room.Category.Id.In
 # -----------------------
 # Step 1: Ask for LL (Level Code)
 # -----------------------
-level_options = ["B3U", "B3", "B3T", "B2", "B1", "L1", "L2", "L2M", "L3", "L4", "L5", "L6", "L6M", "ROF", "Other"]
+level_options = [
+    "B3U", "B3", "B3T",
+    "B2", "B2L", "B2M",
+    "B1", "B1L", "B1M",
+    "L1", "L1L", "L1M",
+    "L2", "L2M",
+    "L3", "L4", "L5",
+    "L6", "L6M",
+    "ROF", "Other"
+]
 user_level = forms.SelectFromList.show(level_options, title="Select Level Code", button_name="Select", multiselect=False)
 
 if not user_level:
@@ -133,5 +142,3 @@ t = Transaction(doc, "Assign Room Number")
 t.Start()
 selected_room.LookupParameter("Number").Set(new_number)
 t.Commit()
-
-

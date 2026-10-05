@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 __title__ = "Door\nMark"
-__author__ = "JK_Sim"
+__author__ = "JM"
 __doc__ = """Version = 1.6
-Date    = 02.11.2025
+Date    = 02.08.2026
 _____________________________________________________________________
 Description:
 

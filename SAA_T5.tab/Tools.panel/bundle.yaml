@@ -8,3 +8,5 @@ layout:
   - TagAlign
   - RecreateShaft
   - ZoomSelected
+  - CalloutToFix
+  - CheckWallGap

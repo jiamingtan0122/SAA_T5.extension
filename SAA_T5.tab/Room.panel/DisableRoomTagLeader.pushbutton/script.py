@@ -1,20 +1,18 @@
 # -*- coding: utf-8 -*-
 __title__ = "Disable\nTag Leader"
 __author__ = "JM"
-__doc__ = """Version = 1.4
-Date    = 30.07.2026
+__doc__ = """Version = 1.5
+Date    = 21.10.2026
 _____________________________________________________________________
 Description:
-Disables the leader on selected Room Tags only, so you can keep the
-leader on any tags that still need one.
-Tag head positions are preserved after leader is removed, where the
-room geometry allows it (Revit will not let a leader-less tag head
-sit outside its host room, so a handful may fall back to the
-room's crosshair position instead).
+Disables the leader on selected Room Tags whose tag head sits inside
+its room boundary. Tags whose head sits outside the room keep their
+leader. Tag head positions are preserved after the leader is removed.
 _____________________________________________________________________
 How-to:
--> Select the Room Tags you want to fix (or run with nothing
-   selected and you'll be prompted to pick them)
+-> Select the Room Tags you want to fix, OR select views / sheets
+   in the Project Browser to process every Room Tag in them
+   (or run with nothing selected and you'll be prompted to pick tags)
 -> Run this script
 -> Done
 _____________________________________________________________________
@@ -28,9 +26,42 @@ uidoc = revit.uidoc
 output = script.get_output()
 
 # ------------------------------------- GET ROOM TAGS FROM SELECTION
+ROOM_TAG_CAT = int(BuiltInCategory.OST_RoomTags)
+
+
+def id_int(eid):
+    # ElementId.IntegerValue was removed in Revit 2026 -> use .Value there
+    try:
+        return eid.Value
+    except AttributeError:
+        return eid.IntegerValue
+
+
 selection = revit.get_selection()
 collector = [el for el in selection if el.Category
-             and el.Category.Id.IntegerValue == int(BuiltInCategory.OST_RoomTags)]
+             and id_int(el.Category.Id) == ROOM_TAG_CAT]
+
+if not collector:
+    # views / sheets selected in the Project Browser -> all room tags in them
+    views = []
+    for el in selection:
+        if isinstance(el, ViewSheet):
+            views.extend(doc.GetElement(vid) for vid in el.GetAllPlacedViews())
+        elif isinstance(el, View) and not el.IsTemplate:
+            views.append(el)
+
+    seen = set()
+    for v in views:
+        for tag in FilteredElementCollector(doc, v.Id) \
+                .OfCategory(BuiltInCategory.OST_RoomTags) \
+                .WhereElementIsNotElementType():
+            if id_int(tag.Id) not in seen:
+                seen.add(id_int(tag.Id))
+                collector.append(tag)
+
+    if views and not collector:
+        forms.alert("No Room Tags found in the {} selected view(s).".format(len(views)))
+        script.exit()
 
 if not collector:
     # nothing pre-selected (or selection had no room tags) -> prompt to pick
@@ -39,7 +70,7 @@ if not collector:
             Selection.ObjectType.Element,
             forms.SelectionFilter(
                 lambda el: el.Category is not None
-                and el.Category.Id.IntegerValue == int(BuiltInCategory.OST_RoomTags)
+                and id_int(el.Category.Id) == ROOM_TAG_CAT
             ),
             "Select Room Tags to remove the leader from"
         )
@@ -54,16 +85,36 @@ if not collector:
 
 total = len(collector)
 
+
+def head_inside_room(tag):
+    """True if the tag head lies within the tagged room's boundary."""
+    room = tag.Room
+    if room is None:
+        # linked-model room or unplaced -> treat as outside (keep leader)
+        return False
+    p = tag.TagHeadPosition
+    bb = room.get_BoundingBox(None)
+    # tag head Z may not sit within the room volume -> test at room mid-height
+    z = (bb.Min.Z + bb.Max.Z) / 2.0 if bb else p.Z
+    return room.IsPointInRoom(XYZ(p.X, p.Y, z))
+
+
 # ------------------------------------- DISABLE LEADERS, PRESERVE POSITION
 fixed = 0
 fallback = 0
 no_leader = 0
+kept = 0
 
 with Transaction(doc, "Disable Room Tag Leaders") as t:
     t.Start()
     with forms.ProgressBar(title="Removing tag leaders ({value} of {max_value})") as pb:
         for i, tag in enumerate(collector):
-            if tag.HasLeader:
+            if not tag.HasLeader:
+                no_leader += 1
+            elif not head_inside_room(tag):
+                # tag head outside room -> keep the leader
+                kept += 1
+            else:
                 original_pos = tag.TagHeadPosition
                 tag.HasLeader = False
                 try:
@@ -71,17 +122,16 @@ with Transaction(doc, "Disable Room Tag Leaders") as t:
                     tag.TagHeadPosition = original_pos
                     fixed += 1
                 except Exception:
-                    # position was outside the room -> Revit keeps the
+                    # Revit rejected the position -> keeps the
                     # crosshair position it snapped to instead
                     fallback += 1
-            else:
-                no_leader += 1
             pb.update_progress(i + 1, total)
     t.Commit()
 
 # ------------------------------------- REPORT
 output.print_md(
-    "**Done** — {} tags total | {} restored to original position | "
-    "{} snapped to room crosshair (couldn't sit outside room) | {} already had no leader"
-    .format(total, fixed, fallback, no_leader)
+    "**Done** — {} tags total | {} leaders removed (inside room) | "
+    "{} leaders kept (head outside room) | {} snapped to room crosshair | "
+    "{} already had no leader"
+    .format(total, fixed, kept, fallback, no_leader)
 )

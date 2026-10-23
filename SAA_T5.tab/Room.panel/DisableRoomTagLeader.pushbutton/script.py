@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 __title__ = "Disable\nTag Leader"
 __author__ = "JM"
-__doc__ = """Version = 1.5
-Date    = 21.10.2026
+__doc__ = """Version = 1.6
+Date    = 23.10.2026
 _____________________________________________________________________
 Description:
 Disables the leader on selected Room Tags whose tag head sits inside
@@ -104,6 +104,7 @@ fixed = 0
 fallback = 0
 no_leader = 0
 kept = 0
+failed = []
 
 with Transaction(doc, "Disable Room Tag Leaders") as t:
     t.Start()
@@ -116,7 +117,15 @@ with Transaction(doc, "Disable Room Tag Leaders") as t:
                 kept += 1
             else:
                 original_pos = tag.TagHeadPosition
-                tag.HasLeader = False
+                try:
+                    tag.HasLeader = False
+                except Exception:
+                    # Revit's own host check disagrees with ours
+                    # ("Pinned tag head position must be located in the
+                    # host element") -> skip, leave the leader on
+                    failed.append(tag.Id)
+                    pb.update_progress(i + 1, total)
+                    continue
                 try:
                     # try to restore the exact remembered position
                     tag.TagHeadPosition = original_pos
@@ -135,3 +144,10 @@ output.print_md(
     "{} already had no leader"
     .format(total, fixed, kept, fallback, no_leader)
 )
+if failed:
+    output.print_md(
+        "**{} tags skipped** — Revit refused to remove the leader "
+        "(tag head not inside host room by Revit's check). "
+        "Move the tag head into the room and re-run:".format(len(failed))
+    )
+    print(output.linkify(failed))

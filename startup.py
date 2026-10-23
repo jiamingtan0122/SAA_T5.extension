@@ -21,6 +21,7 @@ PATH_MAP = [
 ]
 # release folders copied in full, on top of the manifest list
 SCAN_DIRS = ["SJ.tab/BIMGuard.panel"]
+EXTRAS_DIR = os.path.join(EXT_DIR, "extras")
 SP_LIBRARY = "A&D AR BIM Management - Documents"
 SP_FOLDER = "BIM Config"
 SP_SHORTCUT = "A&D AR BIM Management - BIM Config"
@@ -139,6 +140,27 @@ def sync_release(config_dir):
     return version, copied, failed
 
 
+def copy_extras():
+    """Our own extras for the synced panels (icons, button order), kept in
+    extras\\<panel> because the panels themselves are not in git. Only called
+    after the release sync worked, so users without BIM Config get no panel."""
+    copied = []
+    for root, dirs, names in os.walk(EXTRAS_DIR):
+        for n in names:
+            src = os.path.join(root, n)
+            rel = os.path.relpath(src, EXTRAS_DIR)
+            dst = os.path.join(EXT_DIR, "SAA_T5.tab", rel)
+            if not os.path.isdir(os.path.dirname(dst)):
+                continue        # that button did not come from the release
+            if not _same(src, dst):
+                with open(src, "rb") as fs:
+                    data = fs.read()
+                with open(dst, "wb") as fd:
+                    fd.write(data)
+                copied.append(rel)
+    return copied
+
+
 CONFIG_DIR = find_config_dir()
 if CONFIG_DIR and not os.environ.get("VT_CONFIG_DIR"):
     # lib\vt_lock.py does not know the "shortcut made on the folder itself"
@@ -152,6 +174,10 @@ if not CONFIG_DIR:
 else:
     try:
         version, copied, failed = sync_release(CONFIG_DIR)
+        try:
+            copied += ["extras/" + r for r in copy_extras()]
+        except Exception as e:
+            failed.append("extras ({})".format(e))
         msg = "{} - release {} from {}: {} file(s) updated".format(
             stamp, version, CONFIG_DIR, len(copied))
         if failed:

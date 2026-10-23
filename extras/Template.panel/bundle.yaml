@@ -1,0 +1,7 @@
+layout:
+  - CheckStartup
+  - ProjectInfo
+  - RulesEditor
+  - SetPassword
+  - Unlock
+

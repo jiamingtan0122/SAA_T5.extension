@@ -3,5 +3,4 @@ layout:
   - ProjectInfo
   - RulesEditor
   - SetPassword
-  - Unlock
-
+  - Lock

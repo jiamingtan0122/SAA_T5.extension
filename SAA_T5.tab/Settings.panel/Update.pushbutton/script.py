@@ -6,6 +6,8 @@ __title__ = "Update\nSAA_T5"
 __context__ = "zero-doc"
 
 import os
+import clr
+clr.AddReference("System")      # Process lives in System.dll
 from System.Diagnostics import Process, ProcessStartInfo
 from pyrevit import forms
 

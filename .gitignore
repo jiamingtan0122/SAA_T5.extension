@@ -1,2 +1,9 @@
 __pycache__/
 *.pyc
+
+# BIMGuard files: never on GitHub. startup.py copies them in at Revit start
+# from the BIM Config release folder (OneDrive shortcut users only).
+SAA_T5.tab/Template.panel/
+lib/vt_*.py
+lib/vt_features/
+*.new

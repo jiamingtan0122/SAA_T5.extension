@@ -1,24 +1,19 @@
-# show internal notes when document is opened
-##### IMPORTS
-from System.Collections.Generic import *
-from Autodesk.Revit.DB import *
-from pyrevit import revit, DB, UI
-from pyrevit import script
-from pyrevit import forms
-from pyrevit import EXEC_PARAMS, HOST_APP
-import time
+# Reset the autosave timer when a document is opened (see view-activated.py)
 import os
+import time
+from pyrevit.userconfig import user_config
 
-doc = __eventargs__.Document
 try:
-    title = doc.Title
-except:
-    sys.exit()
-
-savestatus_datafile = os.path.join(
-    os.path.expandvars("%userprofile%\\AppData\\Roaming\\pyRevit\\Cache"),
-    title + str(hash(doc.PathName)) + "_savestatus.txt",
-)
-
-with open(savestatus_datafile, "w") as f:
-    f.write(str(title) + "|" + str(time.time()))
+    doc = __eventargs__.Document
+    if (user_config.autosave.get_option("enabled")
+            and not doc.IsDetached
+            and not doc.IsFamilyDocument
+            and doc.PathName):
+        path = os.path.join(
+            os.path.expandvars("%userprofile%\AppData\Roaming\pyRevit\Cache"),
+            doc.Title + str(hash(doc.PathName)) + "_savestatus.txt",
+        )
+        with open(path, "w") as f:
+            f.write(str(doc.Title) + "|" + str(time.time()))
+except Exception:
+    pass
